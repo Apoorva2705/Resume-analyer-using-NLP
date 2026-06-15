@@ -9,7 +9,6 @@ import streamlit as st
 import pdfplumber
 import fitz  # PyMuPDF
 import pandas as pd
-import pymysql
 import plotly.express as px
 from PIL import Image
 from streamlit_tags import st_tags
@@ -89,6 +88,10 @@ DOMAIN_KEYWORDS = {
     "UI-UX Development": [
         "ux", "ui", "figma", "adobe xd", "wireframe", "prototype",
         "prototyping", "user research"
+    ],
+    "Python Development": [
+    "Python","SQL","OOP","Data Structures","Algorithms","Git","GitHub",
+    "Streamlit","File Handling","Debugging"
     ]
 }
 
@@ -121,48 +124,56 @@ DOMAIN_RECOMMENDED_SKILLS = {
         "Wireframing", "Prototyping",
         "Figma or Adobe XD", "Design Systems",
         "Interaction Design", "Usability Testing"
-    ]
+    ],
+    "Python Development": [
+    "Python",
+    "SQL",
+    "OOP",
+    "Data Structures",
+    "Algorithms",
+    "Git",
+    "GitHub",
+    "Streamlit",
+    "File Handling",
+    "Debugging"
+]
 }
 
 # --------------- DB CONNECTION (LOCAL / SIMPLE) ---------------
-DB_AVAILABLE = True
-connection, cursor = None, None
+def insert_data(
+    name,
+    email,
+    res_score,
+    timestamp,
+    no_of_pages,
+    reco_field,
+    cand_level,
+    skills,
+    recommended_skills,
+    courses
+):
 
-try:
-    # 🔴 CHANGE THESE TO MATCH YOUR MYSQL SETUP
-    connection = pymysql.connect(
-        host="localhost",
-        user="sra_user",        # e.g. "root" or your MySQL username
-        password="yourpassword",# your MySQL password
-        database="sra",         # database name
-    )
-    cursor = connection.cursor()
-except Exception as e:
-    print("DB connection error:", e)
-    DB_AVAILABLE = False
+    file_name = "user_data.csv"
 
+    row = {
+        "Name": name,
+        "Email": email,
+        "Resume Score": res_score,
+        "Timestamp": timestamp,
+        "Pages": no_of_pages,
+        "Field": reco_field,
+        "Level": cand_level,
+        "Skills": skills,
+        "Recommended Skills": recommended_skills,
+        "Courses": courses
+    }
 
-def insert_data(name, email, res_score, timestamp, no_of_pages,
-                reco_field, cand_level, skills, recommended_skills, courses):
-    if not DB_AVAILABLE:
-        return
-    sql = """
-        INSERT INTO user_data
-        (Name, Email_ID, resume_score, Timestamp, Page_no,
-         Predicted_Field, User_level, Actual_skills,
-         Recommended_skills, Recommended_courses)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-    """
-    vals = (
-        name, email, str(res_score), timestamp, str(no_of_pages),
-        reco_field, cand_level, skills, recommended_skills, courses
-    )
-    try:
-        cursor.execute(sql, vals)
-        connection.commit()
-    except Exception as e:
-        print("DB insert error:", e)
+    df = pd.DataFrame([row])
 
+    if os.path.exists(file_name):
+        df.to_csv(file_name, mode="a", header=False, index=False)
+    else:
+        df.to_csv(file_name, index=False)
 # --------------- PDF VIEW/TEXT ---------------
 def show_pdf(file_path: str):
     with open(file_path, "rb") as f:
@@ -194,172 +205,105 @@ def get_resume_text(pdf_path: str) -> str:
     return text
 
 # --------------- ✅ ROBUST NAME DETECTION ---------------
-def extract_name(text: str) -> str:
-    """
-    Robust resume name extractor:
-    1. Detects name near email
-    2. Scores top 12 lines
-    3. Fallback to capitalized phrase
-    """
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    top_lines = lines[:12]
+def extract_name(text):
 
-    junk_words = {
-        "resume", "curriculum", "profile", "summary",
-        "experience", "education", "skills", "developer", "engineer",
-        "designer", "consultant", "analyst", "software", "data",
-        "mobile", "ios", "android", "ui", "ux", "email", "phone"
-    }
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
 
-    email_pattern = r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+"
+    for line in lines[:10]:
 
-    # 1) line(s) before email
-    for i, line in enumerate(top_lines):
-        if re.search(email_pattern, line):
-            for j in range(i - 1, max(-1, i - 4), -1):
-                cand = top_lines[j]
-                if valid_name_candidate(cand, junk_words):
-                    return clean_name(cand)
+        # Skip email lines
+        if "@" in line:
+            continue
 
-    # 2) best candidate from top lines
-    scored = []
-    for line in top_lines:
-        if valid_name_candidate(line, junk_words):
-            scored.append((name_score(line), line))
+        # Skip LinkedIn/GitHub lines
+        if "linkedin" in line.lower():
+            continue
 
-    if scored:
-        scored.sort(reverse=True)
-        return clean_name(scored[0][1])
+        if "github" in line.lower():
+            continue
 
-    # 3) fallback: first capitalized phrase
-    big_caps = re.findall(r"\b[A-Z][a-z]+(?:\s[A-Z][a-z]+){1,3}\b", text)
-    if big_caps:
-        return big_caps[0].strip()
+        # Skip phone number lines
+        if re.search(r"\d{10}", line):
+            continue
 
-    return "Candidate"
+        # Skip job titles
+        skip_words = [
+            "developer",
+            "engineer",
+            "student",
+            "aspiring",
+            "python",
+            "software"
+        ]
 
+        if any(word in line.lower() for word in skip_words):
+            continue
 
-def valid_name_candidate(line: str, junk_words: set) -> bool:
-    clean = re.sub(r"[^A-Za-z ]", "", line)
-    words = clean.split()
-    if not (2 <= len(words) <= 4):
-        return False
-    if any(w.lower() in junk_words for w in words):
-        return False
-    if any(len(w) < 2 for w in words):
-        return False
-    if any(ch.isdigit() for ch in line):
-        return False
-    return True
+        cleaned = re.sub(r"[^A-Za-z.\s]", "", line).strip()
+
+        if len(cleaned) >= 5:
+            return cleaned.title()
+
+    return "Not Found"
+
+def extract_email(text):
+
+    pattern = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+
+    matches = re.findall(pattern, text)
+
+    if matches:
+        return matches[0]
+
+    return "Not Found"
 
 
-def name_score(line: str) -> int:
-    score = 0
-    words = line.split()
-    if line.istitle():
-        score += 4
-    if 2 <= len(words) <= 3:
-        score += 4
-    if all(w and w[0].isupper() for w in words):
-        score += 3
-    return score
+def extract_phone(text):
 
+    text = text.replace("\n", " ")
 
-def clean_name(name: str) -> str:
-    name = re.sub(r"[^A-Za-z ]", "", name)
-    return re.sub(r"\s+", " ", name).strip().title()
+    pattern = r"(?:\+91[\-\s]?)?[6-9]\d{9}"
 
-# --------------- EMAIL & PHONE ---------------
-def extract_email(text: str) -> str:
-    pattern = r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+"
-    m = re.findall(pattern, text)
-    return m[0] if m else "Unknown"
+    matches = re.findall(pattern, text)
 
+    if matches:
+        return matches[0]
 
-def extract_phone(text: str) -> str:
-    pattern = r"(\+?\d[\d\-\s().]{8,16}\d)"
-    m = re.findall(pattern, text)
-    return m[0] if m else "Unknown"
+    pattern2 = r"\+?\d[\d\s\-\(\)]{8,15}\d"
+
+    matches = re.findall(pattern2, text)
+
+    if matches:
+        return matches[0]
+
+    return "Not Found"
 
 # --------------- SKILLS (multi-stage) ---------------
-def heuristic_skills_from_section(text: str):
-    lines = text.splitlines()
-    candidates = []
-    idxs = [i for i, l in enumerate(lines) if re.search(r"\bskills\b", l, re.I)]
+def extract_skills_from_text(text, skills_list):
 
-    for idx in idxs:
-        for line in lines[idx + 1: idx + 10]:
-            clean = re.sub(r"^[\-\u2022•·]+", "", line)
-            parts = re.split(r"[,/|;•·]", clean)
-            for p in parts:
-                t = p.strip()
-                if len(t) < 3:
-                    continue
-                if any(ch.isdigit() for ch in t):
-                    continue
-                if t.lower() in STOPWORDS:
-                    continue
-                bad = {"skills", "technical skills", "soft skills",
-                       "professional", "summary", "experience", "education"}
-                if t.lower() in bad:
-                    continue
-                candidates.append(t)
+    text_lower = text.lower()
 
-    seen, final = set(), []
-    for s in candidates:
-        if s not in seen:
-            final.append(s)
-            seen.add(s)
-    return final
+    detected = set()
 
-
-def tech_keywords_from_text(text: str):
-    low = text.lower()
-    found = []
-    for kw in TECH_KEYWORDS:
-        if kw in low:
-            found.append(kw.title())
-    seen, final = set(), []
-    for s in found:
-        if s not in seen:
-            final.append(s)
-            seen.add(s)
-    return final
-
-
-def extract_skills_from_text(text: str, skills_list):
-    clean_text = re.sub(r"[^a-zA-Z0-9+.# ]", " ", text.lower())
-    tokens = set(clean_text.split())
-
-    extracted = []
-
-    # CSV-based skills
+    # Skills from skills.csv
     for skill in skills_list:
-        s = skill.strip()
-        if not s:
+
+        skill = skill.strip()
+
+        if not skill:
             continue
-        sl = s.lower()
-        if " " not in sl and len(sl) < 3:
+
+        if skill.lower() in text_lower:
+            detected.add(skill.title())
+
+    # Skills from TECH_KEYWORDS
+    for skill in TECH_KEYWORDS:
+        if len(skill) < 3:
             continue
-        if " " in sl:
-            if re.search(r"\b" + re.escape(sl) + r"\b", clean_text):
-                extracted.append(s)
-        else:
-            if sl in tokens:
-                extracted.append(s)
+        if re.search(r"\b" + re.escape(skill.lower()) + r"\b", text_lower):
+            detected.add(skill.title())
 
-    # skills section
-    extracted.extend(heuristic_skills_from_section(text))
-
-    # tech dict
-    extracted.extend(tech_keywords_from_text(text))
-
-    seen, final = set(), []
-    for s in extracted:
-        if s not in seen:
-            final.append(s)
-            seen.add(s)
-    return final
+    return sorted(list(detected))
 
 # --------------- ATS KEYWORDS & MATCH ---------------
 def extract_keywords_for_ats(text: str):
@@ -409,7 +353,10 @@ def predict_field_and_reco(extracted_skills, full_text_lower):
     scores = {}
 
     def count(keywords):
-        return sum(1 for k in keywords if k in sl or k in full_text_lower)
+        return sum(
+        1 for k in keywords
+        if k.lower() in [s.lower() for s in extracted_skills]
+    )
 
     for domain, kws in DOMAIN_KEYWORDS.items():
         scores[domain] = count(kws)
@@ -433,6 +380,8 @@ def predict_field_and_reco(extracted_skills, full_text_lower):
         course_list = ios_course
     elif best_domain == "UI-UX Development":
         course_list = uiux_course
+    elif best_domain == "Python Development":
+        course_list = []
     else:
         course_list = []
 
@@ -440,7 +389,7 @@ def predict_field_and_reco(extracted_skills, full_text_lower):
 
 # --------------- COURSE RECOMMENDER ---------------
 def course_recommender(course_list):
-    st.subheader("*Courses & Certificates 🎓 Recommendations*")
+    st.subheader("Courses & Certificates 🎓 Recommendations")
     if not course_list:
         st.info("No course list configured.")
         return []
@@ -457,29 +406,50 @@ def course_recommender(course_list):
 
 # --------------- RESUME SCORE ---------------
 def calculate_resume_score(resume_data, recommended_skills):
+
     score = 0
+    matched = 0
     user_skills = resume_data.get("skills", [])
 
-    if user_skills and recommended_skills:
-        matched = len(set(user_skills).intersection(set(recommended_skills)))
-        score += matched / len(recommended_skills) * 50
+    # Case-insensitive comparison
+    user_set = {skill.lower().strip() for skill in user_skills}
+    reco_set = {skill.lower().strip() for skill in recommended_skills}
 
+    if reco_set:
+        matched = len(user_set.intersection(reco_set))
+        score += (matched / len(reco_set)) * 60
+
+    # Page score
     pages = resume_data.get("no_of_pages", 1)
+
     if pages == 1:
-        score += 10
-    elif pages == 2:
         score += 15
+    elif pages == 2:
+        score += 10
     else:
-        score += 20
+        score += 5
 
-    completeness = sum(
-        1 for f in ["name", "email", "mobile_number", "skills"]
-        if resume_data.get(f)
-    )
-    score += (completeness / 4) * 30
+    # Basic completeness
+    completeness = 0
 
-    return round(score, 2)
+    if resume_data.get("name"):
+        completeness += 1
 
+    if resume_data.get("email"):
+        completeness += 1
+
+    if resume_data.get("mobile_number"):
+        completeness += 1
+
+    if user_skills:
+        completeness += 1
+
+    score += (completeness / 4) * 25
+    st.write("User Skills:", user_skills)
+    st.write("Recommended Skills:", recommended_skills)
+    st.write("Matched Skills:", matched)
+    st.write("Current Score:", score)
+    return round(min(score, 100), 2)
 # --------------- TIPS ---------------
 def generate_resume_tips(res_score, ats_score, section_presence, no_of_pages,
                          level, missing_kw, extracted_skills,
@@ -497,24 +467,24 @@ def generate_resume_tips(res_score, ats_score, section_presence, no_of_pages,
 
     if not section_presence.get("Skills", False) or len(extracted_skills) < 5:
         tips.append(
-            "Create a dedicated **Skills** section with 8–15 relevant skills "
+            "Create a dedicated *Skills* section with 8–15 relevant skills "
             "(languages, frameworks, tools) in a clean list."
         )
 
     if level == "Fresher" and not section_presence.get("Projects", False):
         tips.append(
-            "As a fresher, add 2–4 **Projects** with tech stack, your role, and results "
+            "As a fresher, add 2–4 *Projects* with tech stack, your role, and results "
             "to prove your practical skills."
         )
 
     if level != "Fresher" and not section_presence.get("Experience", False):
         tips.append(
-            "Add a **Work Experience** section in reverse chronological order "
+            "Add a *Work Experience* section in reverse chronological order "
             "with achievement-focused bullet points."
         )
 
     if no_of_pages > 2:
-        tips.append("Try to keep the resume within **1–2 pages**. Remove old or irrelevant details.")
+        tips.append("Try to keep the resume within *1–2 pages*. Remove old or irrelevant details.")
 
     if len(extracted_skills) > 18:
         tips.append(
@@ -537,7 +507,7 @@ def generate_resume_tips(res_score, ats_score, section_presence, no_of_pages,
     if ats_score is not None:
         if ats_score < 50:
             tips.append(
-                "ATS match is low. Re-read the Job Description and add the **exact keywords** "
+                "ATS match is low. Re-read the Job Description and add the *exact keywords* "
                 "in your Skills and Experience (only for skills you actually have)."
             )
         elif ats_score < 75:
@@ -555,7 +525,7 @@ def generate_resume_tips(res_score, ats_score, section_presence, no_of_pages,
 
     if recommended_skills:
         tips.append(
-            "Build or strengthen the **Recommended Skills** shown above; "
+            "Build or strengthen the *Recommended Skills* shown above; "
             "they’re critical for your predicted field."
         )
 
@@ -614,7 +584,7 @@ def run():
         email = st.text_input("Email", value=email_raw)
         mobile_number = st.text_input("Contact", value=phone_raw)
 
-        st.write(f"**Pages:** {no_of_pages}")
+        st.write(f"*Pages:* {no_of_pages}")
 
         if no_of_pages == 1:
             level = "Fresher"
@@ -622,7 +592,7 @@ def run():
             level = "Intermediate"
         else:
             level = "Experienced"
-        st.markdown(f"### 🧠 Candidate Level: **{level}**")
+        st.markdown(f"### 🧠 Candidate Level: *{level}*")
 
         st.markdown("### Skills Detected 👍")
         extracted_skills = st_tags(
@@ -646,7 +616,7 @@ def run():
         rec_course = []
 
         if field:
-            st.markdown(f"### 🔮 Predicted Field: **{field}**")
+            st.markdown(f"### 🔮 Predicted Field: *{field}*")
             if recommended_skills:
                 st_tags(
                     label="### Recommended Skills",
@@ -663,7 +633,7 @@ def run():
             st_tags(label="### Recommended Skills", value=[], key="skills_reco")
 
         res_score = calculate_resume_score(resume_data, recommended_skills)
-        st.markdown(f"## 📊 Resume Score: **{res_score}/100**")
+        st.markdown(f"## 📊 Resume Score: *{res_score}/100*")
         if res_score > 80:
             st.success("Excellent! Resume is well structured and fairly optimized.")
         elif res_score > 60:
@@ -685,7 +655,7 @@ def run():
         ats_score, matched_kw, missing_kw = None, set(), set()
         if job_desc.strip():
             ats_score, matched_kw, missing_kw = ats_match(text, job_desc)
-            st.markdown(f"### ✅ ATS Match Score: **{ats_score}%**")
+            st.markdown(f"### ✅ ATS Match Score: *{ats_score}%*")
 
             col1, col2 = st.columns(2)
             with col1:
@@ -739,10 +709,6 @@ def run():
         st.markdown("## Smart Resume Analyzer – Admin Panel")
         st.markdown("### Welcome to Admin Side")
 
-        if not DB_AVAILABLE:
-            st.error("Database is not connected. Check DB credentials in app.py.")
-            return
-
         ad_user = st.text_input("Username")
         ad_password = st.text_input("Password", type="password")
 
@@ -750,20 +716,13 @@ def run():
             if ad_user == "C_vision" and ad_password == "Baas@007":
                 st.success("Welcome C_vision Data")
 
-                cursor.execute("SELECT * FROM user_data")
-                data = cursor.fetchall()
-                if not data:
-                    st.warning("No user data found in database.")
+                if not os.path.exists("user_data.csv"):
+                    st.warning("No user data found.")
                     return
-
-                df = pd.DataFrame(
-                    data,
-                    columns=[
-                        "ID", "Name", "Email", "Resume Score", "Timestamp",
-                        "Page No", "Field", "Level",
-                        "Skills", "Recommended Skills", "Courses",
-                    ],
-                )
+                df = pd.read_csv("user_data.csv")
+                if df.empty:
+                   st.warning("No user data found.")
+                   return
 
                 st.markdown("### User's 👨‍💻 Data")
                 st.dataframe(df, use_container_width=True)
